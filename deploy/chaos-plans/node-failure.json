@@ -1,0 +1,7 @@
+{
+  "name": "Node Failure Recovery",
+  "description": "Kill a node and measure recovery time",
+  "events": [
+    {"at_seconds": 30, "scenario": "node_kill", "target": "crdb-3", "duration_seconds": 60}
+  ]
+}

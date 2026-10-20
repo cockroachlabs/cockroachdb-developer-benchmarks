@@ -1,0 +1,30 @@
+server:
+  port: ${AGENT_PORT:7001}
+
+spring:
+  datasource:
+    url: ${JDBC_URL:jdbc:postgresql://localhost:26257/benchmark?sslmode=disable}
+    username: root
+    password:
+    hikari:
+      maximum-pool-size: 40
+      minimum-idle: 10
+      connection-timeout: 30000
+      idle-timeout: 300000
+
+cockroachdb:
+  retry:
+    max-retries: 10
+    delay: 5
+    multiplier: 2.0
+    max-delay: 5000
+    jitter: 10
+  ai:
+    enabled: true
+  cdc:
+    enabled: true
+    base-path: /cdc
+
+agent:
+  mode: ${AGENT_MODE:library}
+  language: ${AGENT_LANGUAGE:java}

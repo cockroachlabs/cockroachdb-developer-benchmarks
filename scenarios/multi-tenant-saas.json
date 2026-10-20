@@ -1,0 +1,125 @@
+{
+  "name": "Multi-Tenant SaaS",
+  "version": "1.0",
+  "description": "Simulates a multi-tenant SaaS platform where each tenant has isolated data but shares the same tables. Tests row-level isolation, cross-tenant queries, tenant provisioning, and the library's multi-region support for REGIONAL BY ROW patterns.",
+  "duration_secs": 60,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS tenants (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name STRING NOT NULL, plan STRING NOT NULL DEFAULT 'free', region STRING NOT NULL DEFAULT 'us-east', max_users INT NOT NULL DEFAULT 10, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_tenants_plan (plan), INDEX idx_tenants_region (region))",
+      "CREATE TABLE IF NOT EXISTS tenant_users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL REFERENCES tenants(id), email STRING NOT NULL, role STRING NOT NULL DEFAULT 'member', last_login TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE INDEX idx_users_email (email), INDEX idx_users_tenant (tenant_id))",
+      "CREATE TABLE IF NOT EXISTS tenant_data (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL REFERENCES tenants(id), data_key STRING NOT NULL, data_value JSONB NOT NULL, version INT NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_data_tenant_key (tenant_id, data_key))",
+      "CREATE TABLE IF NOT EXISTS tenant_events (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL REFERENCES tenants(id), event_type STRING NOT NULL, payload JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_events_tenant_time (tenant_id, created_at DESC))"
+    ],
+    "seed_sql": [
+      "INSERT INTO tenants (id, name, plan, region) SELECT gen_random_uuid(), 'Tenant ' || generate_series::STRING, CASE (generate_series % 3) WHEN 0 THEN 'free' WHEN 1 THEN 'pro' ELSE 'enterprise' END, CASE (generate_series % 3) WHEN 0 THEN 'us-east' WHEN 1 THEN 'us-west' ELSE 'eu-west' END FROM generate_series(1, 100)",
+      "INSERT INTO tenant_users (tenant_id, email, role) SELECT t.id, 'user' || generate_series::STRING || '@tenant' || ROW_NUMBER() OVER (ORDER BY t.id)::STRING || '.com', CASE (generate_series % 3) WHEN 0 THEN 'admin' WHEN 1 THEN 'member' ELSE 'viewer' END FROM tenants t, generate_series(1, 3)"
+    ],
+    "teardown_sql": [
+      "DROP TABLE IF EXISTS tenant_events",
+      "DROP TABLE IF EXISTS tenant_data",
+      "DROP TABLE IF EXISTS tenant_users",
+      "DROP TABLE IF EXISTS tenants"
+    ]
+  },
+  "operations": [
+    {
+      "name": "tenant_data_read",
+      "type": "query",
+      "concurrency": 16,
+      "weight": 30,
+      "sql": [
+        "SELECT d.data_key, d.data_value, d.version, d.updated_at FROM tenant_data d WHERE d.tenant_id = $1 ORDER BY d.updated_at DESC LIMIT 20"
+      ]
+    },
+    {
+      "name": "tenant_data_write",
+      "type": "transaction",
+      "concurrency": 8,
+      "weight": 20,
+      "sql": [
+        "INSERT INTO tenant_data (tenant_id, data_key, data_value) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, data_key) DO UPDATE SET data_value = $3, version = tenant_data.version + 1, updated_at = now()",
+        "INSERT INTO tenant_events (tenant_id, event_type, payload) VALUES ($1, 'data_updated', $4)"
+      ],
+      "params": {
+        "hot_rows": 20
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "user_login",
+      "type": "transaction",
+      "concurrency": 8,
+      "weight": 15,
+      "sql": [
+        "UPDATE tenant_users SET last_login = now() WHERE email = $1",
+        "INSERT INTO tenant_events (tenant_id, event_type, payload) VALUES ($2, 'user_login', $3)"
+      ],
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true
+      }
+    },
+    {
+      "name": "cross_tenant_analytics",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT t.plan, t.region, COUNT(DISTINCT t.id) as tenant_count, COUNT(DISTINCT u.id) as user_count, COUNT(DISTINCT d.id) as data_items FROM tenants t LEFT JOIN tenant_users u ON u.tenant_id = t.id LEFT JOIN tenant_data d ON d.tenant_id = t.id GROUP BY t.plan, t.region ORDER BY tenant_count DESC"
+      ],
+      "params": {
+        "think_time_ms": 500
+      }
+    },
+    {
+      "name": "tenant_event_stream",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT e.event_type, e.payload, e.created_at, t.name as tenant_name FROM tenant_events e JOIN tenants t ON t.id = e.tenant_id WHERE e.tenant_id = $1 ORDER BY e.created_at DESC LIMIT 50"
+      ]
+    },
+    {
+      "name": "provision_tenant",
+      "type": "transaction",
+      "concurrency": 2,
+      "weight": 5,
+      "sql": [
+        "INSERT INTO tenants (name, plan, region) VALUES ($1, $2, $3)",
+        "INSERT INTO tenant_users (tenant_id, email, role) VALUES (currval('tenants_id_seq'), $4, 'admin')",
+        "INSERT INTO tenant_events (tenant_id, event_type, payload) VALUES (currval('tenants_id_seq'), 'tenant_created', $5)"
+      ],
+      "params": {
+        "think_time_ms": 1000
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "follower_read_dashboard",
+      "type": "follower_read",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT t.name, t.plan, t.region, COUNT(u.id) as users, COUNT(d.id) as data_items FROM tenants t LEFT JOIN tenant_users u ON u.tenant_id = t.id LEFT JOIN tenant_data d ON d.tenant_id = t.id WHERE t.region = $1 GROUP BY t.id, t.name, t.plan, t.region ORDER BY users DESC LIMIT 25"
+      ],
+      "params": {
+        "think_time_ms": 300
+      }
+    }
+  ],
+  "assertions": [
+    {"metric": "error_rate", "operator": "<", "value": 0.03, "description": "Error rate under 3%"},
+    {"metric": "p99_latency_ms", "operator": "<", "value": 300, "description": "P99 latency under 300ms"},
+    {"metric": "ops_per_sec", "operator": ">", "value": 200, "description": "Minimum 200 ops/sec"}
+  ]
+}

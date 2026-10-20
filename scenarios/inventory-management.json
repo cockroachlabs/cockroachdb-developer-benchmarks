@@ -1,0 +1,115 @@
+{
+  "name": "Inventory Management",
+  "version": "1.0",
+  "description": "Simulates a warehouse inventory system with stock level tracking, order fulfillment with stock reservation (contention on popular items), supplier restocking, and real-time inventory dashboards. Tests serializable transactions for stock consistency under concurrent order processing.",
+  "duration_secs": 60,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS warehouses (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name STRING NOT NULL, location STRING NOT NULL, capacity INT NOT NULL DEFAULT 10000, INDEX idx_wh_location (location))",
+      "CREATE TABLE IF NOT EXISTS inventory_items (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), sku STRING NOT NULL UNIQUE, name STRING NOT NULL, category STRING NOT NULL, unit_price DECIMAL(10,2) NOT NULL, warehouse_id UUID NOT NULL REFERENCES warehouses(id), quantity INT NOT NULL DEFAULT 0, reserved INT NOT NULL DEFAULT 0, reorder_level INT NOT NULL DEFAULT 10, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_inv_sku (sku), INDEX idx_inv_warehouse (warehouse_id), INDEX idx_inv_category (category), INDEX idx_inv_low_stock (quantity, reorder_level))",
+      "CREATE TABLE IF NOT EXISTS inventory_orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_type STRING NOT NULL, status STRING NOT NULL DEFAULT 'pending', total DECIMAL(10,2) NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ, INDEX idx_ord_status (status), INDEX idx_ord_created (created_at DESC))",
+      "CREATE TABLE IF NOT EXISTS order_lines (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID NOT NULL REFERENCES inventory_orders(id), item_id UUID NOT NULL REFERENCES inventory_items(id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, INDEX idx_lines_order (order_id))",
+      "CREATE TABLE IF NOT EXISTS stock_movements (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), item_id UUID NOT NULL REFERENCES inventory_items(id), movement_type STRING NOT NULL, quantity INT NOT NULL, reference_id UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_movements_item (item_id, created_at DESC))"
+    ],
+    "seed_sql": [
+      "INSERT INTO warehouses (id, name, location) SELECT gen_random_uuid(), 'Warehouse ' || generate_series::STRING, CASE (generate_series % 3) WHEN 0 THEN 'us-east' WHEN 1 THEN 'us-west' ELSE 'eu-west' END FROM generate_series(1, 5)",
+      "INSERT INTO inventory_items (id, sku, name, category, unit_price, warehouse_id, quantity, reorder_level) SELECT gen_random_uuid(), 'SKU-' || LPAD(generate_series::STRING, 5, '0'), 'Item ' || generate_series::STRING, CASE (generate_series % 5) WHEN 0 THEN 'electronics' WHEN 1 THEN 'clothing' WHEN 2 THEN 'food' WHEN 3 THEN 'tools' ELSE 'supplies' END, (5 + random() * 495)::DECIMAL(10,2), (SELECT id FROM warehouses ORDER BY random() LIMIT 1), 50 + (random() * 450)::INT, 10 + (random() * 40)::INT FROM generate_series(1, 500)"
+    ],
+    "teardown_sql": [
+      "DROP TABLE IF EXISTS stock_movements",
+      "DROP TABLE IF EXISTS order_lines",
+      "DROP TABLE IF EXISTS inventory_orders",
+      "DROP TABLE IF EXISTS inventory_items",
+      "DROP TABLE IF EXISTS warehouses"
+    ]
+  },
+  "operations": [
+    {
+      "name": "fulfill_order",
+      "type": "transaction",
+      "concurrency": 16,
+      "weight": 30,
+      "sql": [
+        "UPDATE inventory_items SET quantity = quantity - $1, reserved = reserved + $1, updated_at = now() WHERE id = $2 AND quantity >= $1",
+        "INSERT INTO inventory_orders (order_type, status, total) VALUES ('fulfillment', 'processing', $3)",
+        "INSERT INTO order_lines (order_id, item_id, quantity, unit_price) VALUES (currval('inventory_orders_id_seq'), $2, $1, $4)",
+        "INSERT INTO stock_movements (item_id, movement_type, quantity) VALUES ($2, 'reserved', -$1)"
+      ],
+      "params": {
+        "hot_rows": 30,
+        "amount_range": [1, 10]
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "check_stock",
+      "type": "query",
+      "concurrency": 16,
+      "weight": 25,
+      "sql": [
+        "SELECT i.sku, i.name, i.quantity, i.reserved, (i.quantity - i.reserved) as available, i.unit_price, w.name as warehouse FROM inventory_items i JOIN warehouses w ON w.id = i.warehouse_id WHERE i.id = $1"
+      ]
+    },
+    {
+      "name": "restock",
+      "type": "transaction",
+      "concurrency": 4,
+      "weight": 15,
+      "sql": [
+        "UPDATE inventory_items SET quantity = quantity + $1, updated_at = now() WHERE id = $2",
+        "INSERT INTO stock_movements (item_id, movement_type, quantity) VALUES ($2, 'restock', $1)"
+      ],
+      "params": {
+        "amount_range": [50, 500]
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "low_stock_alert",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT i.sku, i.name, i.category, i.quantity, i.reorder_level, w.name as warehouse, w.location FROM inventory_items i JOIN warehouses w ON w.id = i.warehouse_id WHERE i.quantity <= i.reorder_level ORDER BY (i.quantity::FLOAT / GREATEST(i.reorder_level, 1)) ASC LIMIT 50"
+      ],
+      "params": {
+        "think_time_ms": 300
+      }
+    },
+    {
+      "name": "inventory_dashboard",
+      "type": "query",
+      "concurrency": 2,
+      "weight": 10,
+      "sql": [
+        "SELECT w.name, w.location, COUNT(i.id) as item_count, SUM(i.quantity) as total_stock, SUM(i.reserved) as total_reserved, SUM(i.quantity * i.unit_price) as total_value FROM warehouses w JOIN inventory_items i ON i.warehouse_id = w.id GROUP BY w.id, w.name, w.location ORDER BY total_value DESC"
+      ],
+      "params": {
+        "think_time_ms": 500
+      }
+    },
+    {
+      "name": "stock_history",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT sm.movement_type, sm.quantity, sm.created_at, i.sku, i.name FROM stock_movements sm JOIN inventory_items i ON i.id = sm.item_id WHERE sm.item_id = $1 ORDER BY sm.created_at DESC LIMIT 20"
+      ]
+    }
+  ],
+  "assertions": [
+    {"metric": "error_rate", "operator": "<", "value": 0.03, "description": "Error rate under 3%"},
+    {"metric": "p99_latency_ms", "operator": "<", "value": 200, "description": "P99 latency under 200ms"},
+    {"metric": "ops_per_sec", "operator": ">", "value": 200, "description": "Minimum 200 ops/sec"}
+  ]
+}

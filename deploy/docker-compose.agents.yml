@@ -1,0 +1,145 @@
+services:
+  agent-java-lib:
+    build:
+      context: ../agents/java
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=library
+      - AGENT_PORT=7001
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+      - JDBC_URL=jdbc:postgresql://crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7001:7001"
+    networks:
+      - bench-net
+
+  agent-java-vanilla:
+    build:
+      context: ../agents/java
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=vanilla
+      - AGENT_PORT=7002
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+      - JDBC_URL=jdbc:postgresql://crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7002:7002"
+    networks:
+      - bench-net
+
+  agent-java-native-lib:
+    build:
+      context: ../agents/java
+      dockerfile: Dockerfile.native
+    environment:
+      - AGENT_MODE=library
+      - AGENT_PORT=7009
+      - AGENT_LANGUAGE=java-native
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+      - JDBC_URL=jdbc:postgresql://crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7009:7009"
+    networks:
+      - bench-net
+    profiles:
+      - native
+
+  agent-java-native-vanilla:
+    build:
+      context: ../agents/java
+      dockerfile: Dockerfile.native
+    environment:
+      - AGENT_MODE=vanilla
+      - AGENT_PORT=7010
+      - AGENT_LANGUAGE=java-native
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+      - JDBC_URL=jdbc:postgresql://crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7010:7010"
+    networks:
+      - bench-net
+    profiles:
+      - native
+
+  agent-go-lib:
+    build:
+      context: ../agents/go
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=library
+      - AGENT_PORT=7003
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7003:7003"
+    networks:
+      - bench-net
+
+  agent-go-vanilla:
+    build:
+      context: ../agents/go
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=vanilla
+      - AGENT_PORT=7004
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7004:7004"
+    networks:
+      - bench-net
+
+  agent-python-lib:
+    build:
+      context: ../agents/python
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=library
+      - AGENT_PORT=7005
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7005:7005"
+    networks:
+      - bench-net
+
+  agent-python-vanilla:
+    build:
+      context: ../agents/python
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=vanilla
+      - AGENT_PORT=7006
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7006:7006"
+    networks:
+      - bench-net
+
+  agent-dotnet-lib:
+    build:
+      context: ../agents/dotnet
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=library
+      - AGENT_PORT=7007
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7007:7007"
+    networks:
+      - bench-net
+
+  agent-dotnet-vanilla:
+    build:
+      context: ../agents/dotnet
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_MODE=vanilla
+      - AGENT_PORT=7008
+      - DB_URL=postgresql://root@crdb-1:26257/benchmark?sslmode=disable
+    ports:
+      - "7008:7008"
+    networks:
+      - bench-net
+
+networks:
+  bench-net:
+    external: true
+    name: crdb-bench_bench-net

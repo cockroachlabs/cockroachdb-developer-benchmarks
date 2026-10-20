@@ -1,0 +1,43 @@
+{
+  "name": "CRUD",
+  "description": "Basic INSERT, SELECT, UPDATE, DELETE operations",
+  "duration_secs": 30,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS bench_accounts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), balance DECIMAL(15,2) NOT NULL DEFAULT 1000.00, name STRING NOT NULL, region STRING NOT NULL DEFAULT 'us-east', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ]
+  },
+  "operations": [
+    {
+      "name": "insert",
+      "type": "insert",
+      "concurrency": 4,
+      "weight": 25,
+      "sql": ["INSERT INTO bench_accounts (id, name, balance, region) VALUES ($1, $2, $3, $4)"],
+      "params": {"amount_range": [1000, 10000]}
+    },
+    {
+      "name": "select",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 25,
+      "sql": ["SELECT name, balance FROM bench_accounts WHERE id = $1"]
+    },
+    {
+      "name": "update",
+      "type": "update",
+      "concurrency": 4,
+      "weight": 25,
+      "sql": ["UPDATE bench_accounts SET balance = balance + $1, updated_at = now() WHERE id = $2"],
+      "params": {"amount_range": [-50, 50]}
+    },
+    {
+      "name": "delete",
+      "type": "delete",
+      "concurrency": 4,
+      "weight": 25,
+      "sql": ["DELETE FROM bench_accounts WHERE id = $1"]
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Benchmark Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [{ "expr": "crdb_benchmark_running", "legendFormat": "Running" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "IDLE", "color": "gray" }, "1": { "text": "RUNNING", "color": "green" } } }
+          ],
+          "thresholds": { "steps": [{ "color": "gray", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      }
+    },
+    {
+      "title": "Throughput (ops/sec) — Higher is Better",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "crdb_benchmark_ops_per_sec", "legendFormat": "{{language}}/{{mode}} — {{workload}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "pointSize": 4, "spanNulls": true },
+          "unit": "ops"
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "/java/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#4ecdc4", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/go/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ff6b6b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/python/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ffd93d", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/dotnet/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#c084fc", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/vanilla/" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 5] } }] }
+        ]
+      }
+    },
+    {
+      "title": "P99 Latency (us) — Lower is Better",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "crdb_benchmark_latency_p99_us", "legendFormat": "{{language}}/{{mode}} — {{workload}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true },
+          "unit": "µs"
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "/java/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#4ecdc4", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/go/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ff6b6b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/python/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ffd93d", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/dotnet/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#c084fc", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "title": "Errors — Lower is Better",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "crdb_benchmark_errors_total", "legendFormat": "{{language}}/{{mode}} — {{workload}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "/java/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#4ecdc4", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/go/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ff6b6b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/python/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ffd93d", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/dotnet/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#c084fc", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "title": "Retries — Lower is Better",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "crdb_benchmark_retries_total", "legendFormat": "{{language}}/{{mode}} — {{workload}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "/java/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#4ecdc4", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/go/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ff6b6b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/python/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ffd93d", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "/dotnet/" }, "properties": [{ "id": "color", "value": { "fixedColor": "#c084fc", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "title": "CPU Usage (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "crdb_benchmark_cpu_percent", "legendFormat": "{{language}}/{{mode}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": true } } }
+    },
+    {
+      "title": "Memory RSS (MB)",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        { "expr": "crdb_benchmark_mem_rss_mb", "legendFormat": "{{language}}/{{mode}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "decmbytes", "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": true } } }
+    },
+    {
+      "title": "Active Connections",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 26 },
+      "targets": [
+        { "expr": "crdb_benchmark_active_connections", "legendFormat": "{{language}}/{{mode}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": true } } }
+    },
+    {
+      "title": "Total Operations",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 26 },
+      "targets": [
+        { "expr": "crdb_benchmark_ops_total", "legendFormat": "{{language}}/{{mode}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cockroachdb", "benchmark"],
+  "templating": {
+    "list": [
+      {
+        "name": "workload",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(crdb_benchmark_ops_per_sec, workload)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "CockroachDB Developer Benchmarks",
+  "uid": "crdb-benchmarks",
+  "version": 1
+}

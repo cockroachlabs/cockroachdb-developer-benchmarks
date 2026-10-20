@@ -1,0 +1,91 @@
+{
+  "name": "Banking Transfer",
+  "version": "1.0",
+  "description": "Simulates a banking system with account transfers between hot accounts, balance checks, and audit trail logging. Tests contention handling, transaction integrity, and read/write mixing under realistic financial workload patterns.",
+  "duration_secs": 60,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS bank_accounts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), account_number STRING NOT NULL UNIQUE, holder_name STRING NOT NULL, balance DECIMAL(15,2) NOT NULL DEFAULT 0.00, currency STRING NOT NULL DEFAULT 'USD', status STRING NOT NULL DEFAULT 'active', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+      "CREATE TABLE IF NOT EXISTS bank_transactions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), from_account UUID NOT NULL REFERENCES bank_accounts(id), to_account UUID NOT NULL REFERENCES bank_accounts(id), amount DECIMAL(15,2) NOT NULL, currency STRING NOT NULL DEFAULT 'USD', status STRING NOT NULL DEFAULT 'completed', description STRING, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_txn_from (from_account), INDEX idx_txn_to (to_account), INDEX idx_txn_created (created_at DESC))",
+      "CREATE TABLE IF NOT EXISTS bank_audit_log (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), event_type STRING NOT NULL, account_id UUID, details JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_audit_created (created_at DESC))"
+    ],
+    "seed_sql": [
+      "INSERT INTO bank_accounts (id, account_number, holder_name, balance) SELECT gen_random_uuid(), 'ACCT-' || generate_series::STRING, 'Account Holder ' || generate_series::STRING, 10000.00 + (random() * 90000)::DECIMAL(15,2) FROM generate_series(1, 50)"
+    ],
+    "teardown_sql": [
+      "DROP TABLE IF EXISTS bank_audit_log",
+      "DROP TABLE IF EXISTS bank_transactions",
+      "DROP TABLE IF EXISTS bank_accounts"
+    ]
+  },
+  "operations": [
+    {
+      "name": "transfer",
+      "type": "transaction",
+      "concurrency": 16,
+      "weight": 40,
+      "sql": [
+        "UPDATE bank_accounts SET balance = balance - $1, updated_at = now() WHERE id = $2 AND balance >= $1",
+        "UPDATE bank_accounts SET balance = balance + $1, updated_at = now() WHERE id = $3",
+        "INSERT INTO bank_transactions (from_account, to_account, amount, description) VALUES ($2, $3, $1, 'Transfer')"
+      ],
+      "params": {
+        "hot_rows": 10,
+        "amount_range": [10, 500]
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "balance_check",
+      "type": "query",
+      "concurrency": 8,
+      "weight": 30,
+      "sql": [
+        "SELECT a.account_number, a.holder_name, a.balance, a.currency, COUNT(t.id) as txn_count FROM bank_accounts a LEFT JOIN bank_transactions t ON t.from_account = a.id OR t.to_account = a.id WHERE a.id = $1 GROUP BY a.id, a.account_number, a.holder_name, a.balance, a.currency"
+      ]
+    },
+    {
+      "name": "recent_transactions",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 15,
+      "sql": [
+        "SELECT t.id, t.amount, t.currency, t.status, t.created_at, fa.account_number as from_acct, ta.account_number as to_acct FROM bank_transactions t JOIN bank_accounts fa ON fa.id = t.from_account JOIN bank_accounts ta ON ta.id = t.to_account ORDER BY t.created_at DESC LIMIT 20"
+      ]
+    },
+    {
+      "name": "audit_log",
+      "type": "insert",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "INSERT INTO bank_audit_log (event_type, account_id, details) VALUES ($1, $2, $3)"
+      ],
+      "params": {
+        "think_time_ms": 50
+      }
+    },
+    {
+      "name": "total_balance_check",
+      "type": "query",
+      "concurrency": 2,
+      "weight": 5,
+      "sql": [
+        "SELECT currency, COUNT(*) as accounts, SUM(balance) as total_balance, AVG(balance) as avg_balance FROM bank_accounts WHERE status = 'active' GROUP BY currency"
+      ],
+      "params": {
+        "think_time_ms": 200
+      }
+    }
+  ],
+  "assertions": [
+    {"metric": "error_rate", "operator": "<", "value": 0.05, "description": "Error rate under 5%"},
+    {"metric": "p99_latency_ms", "operator": "<", "value": 500, "description": "P99 latency under 500ms"},
+    {"metric": "ops_per_sec", "operator": ">", "value": 100, "description": "Minimum 100 ops/sec"}
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "name": "IoT Sensor Ingestion",
+  "version": "1.0",
+  "description": "Simulates an IoT platform ingesting high-volume sensor readings from thousands of devices, with periodic aggregation queries for dashboards and alerting. Tests INSERT-heavy throughput with analytical read patterns.",
+  "duration_secs": 60,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS iot_devices (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), device_name STRING NOT NULL, device_type STRING NOT NULL, location STRING NOT NULL, status STRING NOT NULL DEFAULT 'active', registered_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_devices_type (device_type), INDEX idx_devices_location (location))",
+      "CREATE TABLE IF NOT EXISTS iot_readings (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), device_id UUID NOT NULL REFERENCES iot_devices(id), metric_name STRING NOT NULL, metric_value DECIMAL(15,4) NOT NULL, unit STRING NOT NULL, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_readings_device_time (device_id, recorded_at DESC), INDEX idx_readings_metric (metric_name, recorded_at DESC))",
+      "CREATE TABLE IF NOT EXISTS iot_alerts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), device_id UUID NOT NULL REFERENCES iot_devices(id), alert_type STRING NOT NULL, severity STRING NOT NULL, message STRING NOT NULL, acknowledged BOOL NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_alerts_severity (severity, created_at DESC))"
+    ],
+    "seed_sql": [
+      "INSERT INTO iot_devices (id, device_name, device_type, location, status) SELECT gen_random_uuid(), 'sensor-' || generate_series::STRING, CASE (generate_series % 4) WHEN 0 THEN 'temperature' WHEN 1 THEN 'humidity' WHEN 2 THEN 'pressure' ELSE 'motion' END, CASE (generate_series % 3) WHEN 0 THEN 'warehouse-A' WHEN 1 THEN 'warehouse-B' ELSE 'warehouse-C' END, 'active' FROM generate_series(1, 500)"
+    ],
+    "teardown_sql": [
+      "DROP TABLE IF EXISTS iot_alerts",
+      "DROP TABLE IF EXISTS iot_readings",
+      "DROP TABLE IF EXISTS iot_devices"
+    ]
+  },
+  "operations": [
+    {
+      "name": "ingest_reading",
+      "type": "insert",
+      "concurrency": 32,
+      "weight": 50,
+      "sql": [
+        "INSERT INTO iot_readings (device_id, metric_name, metric_value, unit, recorded_at) VALUES ($1, $2, $3, $4, now())"
+      ],
+      "params": {
+        "amount_range": [0, 100]
+      }
+    },
+    {
+      "name": "batch_ingest",
+      "type": "transaction",
+      "concurrency": 8,
+      "weight": 15,
+      "sql": [
+        "INSERT INTO iot_readings (device_id, metric_name, metric_value, unit) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO iot_readings (device_id, metric_name, metric_value, unit) VALUES ($1, $2, $5, $4)",
+        "INSERT INTO iot_readings (device_id, metric_name, metric_value, unit) VALUES ($1, $2, $6, $4)"
+      ],
+      "params": {
+        "amount_range": [0, 100],
+        "batch_size": 3
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "latest_readings_by_device",
+      "type": "query",
+      "concurrency": 8,
+      "weight": 15,
+      "sql": [
+        "SELECT r.metric_name, r.metric_value, r.unit, r.recorded_at FROM iot_readings r WHERE r.device_id = $1 ORDER BY r.recorded_at DESC LIMIT 10"
+      ]
+    },
+    {
+      "name": "aggregation_dashboard",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT d.device_type, d.location, COUNT(r.id) as reading_count, AVG(r.metric_value) as avg_value, MAX(r.metric_value) as max_value, MIN(r.metric_value) as min_value FROM iot_devices d JOIN iot_readings r ON r.device_id = d.id WHERE r.recorded_at > now() - INTERVAL '5 minutes' GROUP BY d.device_type, d.location ORDER BY reading_count DESC"
+      ],
+      "params": {
+        "think_time_ms": 500
+      }
+    },
+    {
+      "name": "threshold_alert",
+      "type": "transaction",
+      "concurrency": 4,
+      "weight": 5,
+      "sql": [
+        "SELECT metric_value FROM iot_readings WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT 1",
+        "INSERT INTO iot_alerts (device_id, alert_type, severity, message) VALUES ($1, 'threshold_exceeded', 'warning', 'Sensor value above threshold')"
+      ],
+      "params": {
+        "think_time_ms": 200
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true
+      }
+    },
+    {
+      "name": "device_status_check",
+      "type": "query",
+      "concurrency": 2,
+      "weight": 5,
+      "sql": [
+        "SELECT d.id, d.device_name, d.status, d.location, COUNT(a.id) as unack_alerts FROM iot_devices d LEFT JOIN iot_alerts a ON a.device_id = d.id AND a.acknowledged = false WHERE d.location = $1 GROUP BY d.id, d.device_name, d.status, d.location ORDER BY unack_alerts DESC LIMIT 50"
+      ],
+      "params": {
+        "think_time_ms": 300
+      }
+    }
+  ],
+  "assertions": [
+    {"metric": "ops_per_sec", "operator": ">", "value": 1000, "description": "Minimum 1000 ops/sec (INSERT-heavy)"},
+    {"metric": "p99_latency_ms", "operator": "<", "value": 100, "description": "P99 latency under 100ms"},
+    {"metric": "error_rate", "operator": "<", "value": 0.01, "description": "Error rate under 1%"}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "Gauntlet",
+  "description": "All 6 scenarios sequentially",
+  "events": [
+    {"at_seconds": 30, "scenario": "node_kill", "target": "crdb-3", "duration_seconds": 30},
+    {"at_seconds": 90, "scenario": "network_partition", "target": "us-west", "duration_seconds": 15},
+    {"at_seconds": 120, "scenario": "region_failure", "target": "eu-west", "duration_seconds": 30},
+    {"at_seconds": 180, "scenario": "latency_injection", "target": "us-west", "duration_seconds": 20},
+    {"at_seconds": 210, "scenario": "rolling_restart", "duration_seconds": 30},
+    {"at_seconds": 270, "scenario": "disk_pressure", "target": "crdb-1", "duration_seconds": 20}
+  ]
+}

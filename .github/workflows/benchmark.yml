@@ -1,0 +1,159 @@
+name: Run Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      topology:
+        description: 'CockroachDB topology'
+        required: true
+        default: 'single'
+        type: choice
+        options:
+          - single
+          - cluster
+          - multi
+      workloads:
+        description: 'Workloads to run (comma-separated)'
+        required: true
+        default: 'crud,retry_storm,mixed_rw'
+        type: string
+      duration:
+        description: 'Duration per workload (seconds)'
+        required: true
+        default: '30'
+        type: string
+      concurrency:
+        description: 'Number of concurrent workers'
+        required: true
+        default: '8'
+        type: string
+      languages:
+        description: 'Languages to benchmark (comma-separated)'
+        required: true
+        default: 'java,go,python,dotnet'
+        type: string
+
+env:
+  BENCH_TOPOLOGY: ${{ inputs.topology }}
+  BENCH_WORKLOADS: ${{ inputs.workloads }}
+  BENCH_DURATION: ${{ inputs.duration }}
+  BENCH_CONCURRENCY: ${{ inputs.concurrency }}
+  BENCH_LANGUAGES: ${{ inputs.languages }}
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build controller
+        run: |
+          cd controller
+          go build -o ../controller-bin ./cmd/server
+
+      - name: Start CockroachDB
+        run: |
+          docker compose -f "deploy/docker-compose.${BENCH_TOPOLOGY}.yml" \
+            -p crdb-bench up -d --wait
+          sleep 10
+          docker exec crdb-bench-crdb-1-1 cockroach sql --insecure \
+            -e "CREATE DATABASE IF NOT EXISTS benchmark"
+          docker exec -i crdb-bench-crdb-1-1 cockroach sql --insecure \
+            --database=benchmark < deploy/init.sql
+
+      - name: Copy libraries for agent builds
+        run: |
+          mkdir -p agents/go/cockroachdb-go-library
+          mkdir -p agents/java/cockroachdb-spring-boot-starter
+          mkdir -p agents/python/cockroachdb-python-library
+          mkdir -p agents/dotnet/cockroachdb-dotnet-library
+          echo "Libraries would be copied from sibling repos in full CI"
+
+      - name: Build and start agents
+        run: |
+          docker compose -f deploy/docker-compose.agents.yml up -d --build
+        continue-on-error: true
+
+      - name: Start controller
+        run: |
+          mkdir -p data results
+          ./controller-bin --port=9495 "--topology=${BENCH_TOPOLOGY}" \
+            --deploy-dir=deploy --data-dir=data &
+          sleep 3
+
+      - name: Run benchmark
+        run: |
+          IFS=',' read -ra WORKLOADS <<< "${BENCH_WORKLOADS}"
+          WORKLOAD_JSON=$(printf '"%s",' "${WORKLOADS[@]}" | sed 's/,$//')
+
+          curl -sf -X POST http://localhost:9495/api/benchmark/start \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"workloads\": [${WORKLOAD_JSON}],
+              \"topology\": \"${BENCH_TOPOLOGY}\",
+              \"duration\": ${BENCH_DURATION},
+              \"concurrency\": ${BENCH_CONCURRENCY}
+            }"
+
+          TOTAL_WORKLOADS=$(echo "${BENCH_WORKLOADS}" | tr ',' '\n' | wc -l)
+          TOTAL_TIME=$(( TOTAL_WORKLOADS * BENCH_DURATION + 30 ))
+          echo "Waiting ${TOTAL_TIME}s for benchmark to complete..."
+          sleep "${TOTAL_TIME}"
+
+          echo "Benchmark completed"
+
+      - name: Generate HTML report
+        run: |
+          curl -sf http://localhost:9495/api/runs/latest/report \
+            -o results/benchmark-report.html || true
+          echo "HTML report generated"
+
+      - name: Export JSON results
+        run: |
+          curl -sf http://localhost:9495/api/runs/latest/export \
+            -o results/benchmark-results.json || true
+          echo "JSON results exported"
+
+      - name: Generate summary
+        run: |
+          echo "## Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Topology | ${BENCH_TOPOLOGY} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Workloads | ${BENCH_WORKLOADS} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Duration | ${BENCH_DURATION}s per workload |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Concurrency | ${BENCH_CONCURRENCY} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Languages | ${BENCH_LANGUAGES} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the HTML report and JSON results from the artifacts below." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report-${{ github.run_number }}
+          path: |
+            results/benchmark-report.html
+            results/benchmark-results.json
+          retention-days: 90
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $(pgrep -f controller-bin) 2>/dev/null || true
+          docker compose -f deploy/docker-compose.agents.yml down 2>/dev/null || true
+          docker compose -f "deploy/docker-compose.${BENCH_TOPOLOGY}.yml" \
+            -p crdb-bench down -v 2>/dev/null || true

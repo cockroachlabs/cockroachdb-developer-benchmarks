@@ -1,0 +1,21 @@
+{
+  "name": "CDC",
+  "description": "Continuous writes with changefeed consumer measuring event processing rate",
+  "duration_secs": 30,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS bench_accounts (id INT8 PRIMARY KEY, name STRING NOT NULL, balance DECIMAL(15,2) NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ]
+  },
+  "operations": [
+    {
+      "name": "cdc_write",
+      "type": "insert",
+      "concurrency": 4,
+      "weight": 100,
+      "sql": ["UPSERT INTO bench_accounts (id, name, balance) VALUES ($1, $2, $3)"],
+      "params": {"amount_range": [0, 10000]}
+    }
+  ]
+}

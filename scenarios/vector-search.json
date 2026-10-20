@@ -1,0 +1,29 @@
+{
+  "name": "Vector Search",
+  "description": "INSERT 1536-dimension vectors and run cosine similarity searches",
+  "duration_secs": 30,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS bench_documents (id INT8 PRIMARY KEY, title STRING NOT NULL, content STRING NOT NULL, embedding FLOAT8[] NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+      "CREATE VECTOR INDEX IF NOT EXISTS idx_bench_docs_embedding ON bench_documents (embedding vector_cosine_ops)"
+    ]
+  },
+  "operations": [
+    {
+      "name": "vector_search",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 60,
+      "sql": ["SELECT id, title, (SELECT sum(a.v * b.v) FROM unnest(embedding) WITH ORDINALITY AS a(v, i), unnest($1::FLOAT8[]) WITH ORDINALITY AS b(v, i) WHERE a.i = b.i) AS similarity FROM bench_documents ORDER BY similarity DESC LIMIT 10"],
+      "library_mode": {"use_retry": false, "use_template": true, "use_follower_read": false}
+    },
+    {
+      "name": "vector_insert",
+      "type": "insert",
+      "concurrency": 2,
+      "weight": 40,
+      "sql": ["INSERT INTO bench_documents (id, title, content, embedding) VALUES ($1, $2, $3, $4::FLOAT8[])"]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "name": "Vector Index Benchmark",
+  "description": "Benchmark v26.2 CREATE VECTOR INDEX features: indexed vs non-indexed, prefix column filtering, beam size tuning",
+  "duration_secs": 60,
+  "warmup_secs": 15,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS bench_documents (id INT8 PRIMARY KEY, title STRING NOT NULL, content STRING NOT NULL, category STRING NOT NULL DEFAULT 'general', embedding FLOAT8[] NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+      "CREATE VECTOR INDEX IF NOT EXISTS idx_bench_docs_embedding ON bench_documents (embedding vector_cosine_ops)",
+      "CREATE VECTOR INDEX IF NOT EXISTS idx_bench_docs_category_embedding ON bench_documents (category, embedding vector_cosine_ops)"
+    ]
+  },
+  "operations": [
+    {
+      "name": "insert_vectors",
+      "type": "insert",
+      "concurrency": 4,
+      "weight": 40,
+      "sql": ["INSERT INTO bench_documents (id, title, content, category, embedding) VALUES ($1, $2, $3, $4, $5::FLOAT8[])"],
+      "library_mode": {"use_retry": true, "use_template": true, "use_follower_read": false}
+    },
+    {
+      "name": "search_indexed",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 25,
+      "sql": ["SET vector_search_beam_size = 32; SELECT id, title, embedding <=> $1::FLOAT8[] AS distance FROM bench_documents ORDER BY embedding <=> $1::FLOAT8[] LIMIT 10"],
+      "library_mode": {"use_retry": false, "use_template": true, "use_follower_read": false}
+    },
+    {
+      "name": "search_filtered",
+      "type": "query",
+      "concurrency": 3,
+      "weight": 15,
+      "sql": ["SET vector_search_beam_size = 32; SELECT id, title, embedding <=> $1::FLOAT8[] AS distance FROM bench_documents WHERE category = $2 ORDER BY embedding <=> $1::FLOAT8[] LIMIT 10"],
+      "library_mode": {"use_retry": false, "use_template": true, "use_follower_read": false}
+    },
+    {
+      "name": "search_no_index",
+      "type": "query",
+      "concurrency": 2,
+      "weight": 10,
+      "sql": ["SELECT id, title, (SELECT sum(a.v * b.v) FROM unnest(embedding) WITH ORDINALITY AS a(v, i), unnest($1::FLOAT8[]) WITH ORDINALITY AS b(v, i) WHERE a.i = b.i) AS similarity FROM bench_documents ORDER BY similarity DESC LIMIT 10"]
+    },
+    {
+      "name": "beam_size_tuning",
+      "type": "query",
+      "concurrency": 2,
+      "weight": 10,
+      "sql": ["SET vector_search_beam_size = 8; SELECT id, title, embedding <=> $1::FLOAT8[] AS distance FROM bench_documents ORDER BY embedding <=> $1::FLOAT8[] LIMIT 10", "SET vector_search_beam_size = 64; SELECT id, title, embedding <=> $1::FLOAT8[] AS distance FROM bench_documents ORDER BY embedding <=> $1::FLOAT8[] LIMIT 10"],
+      "library_mode": {"use_retry": false, "use_template": true, "use_follower_read": false}
+    }
+  ]
+}

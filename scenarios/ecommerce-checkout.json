@@ -1,0 +1,106 @@
+{
+  "name": "E-Commerce Checkout",
+  "version": "1.0",
+  "description": "Simulates an e-commerce platform with product catalog browsing (high read), shopping cart operations, order placement with inventory contention, and order history queries. Tests read-heavy workloads with write spikes during checkout.",
+  "duration_secs": 60,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS products (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name STRING NOT NULL, description STRING, price DECIMAL(10,2) NOT NULL, stock INT NOT NULL DEFAULT 100, category STRING NOT NULL, rating DECIMAL(3,2) DEFAULT 0.00, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_products_category (category), INDEX idx_products_rating (rating DESC))",
+      "CREATE TABLE IF NOT EXISTS shopping_carts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, product_id UUID NOT NULL REFERENCES products(id), quantity INT NOT NULL DEFAULT 1, added_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_cart_user (user_id))",
+      "CREATE TABLE IF NOT EXISTS orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, total DECIMAL(10,2) NOT NULL, status STRING NOT NULL DEFAULT 'pending', shipping_address STRING, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_orders_user (user_id), INDEX idx_orders_status (status), INDEX idx_orders_created (created_at DESC))",
+      "CREATE TABLE IF NOT EXISTS order_items (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID NOT NULL REFERENCES orders(id), product_id UUID NOT NULL REFERENCES products(id), quantity INT NOT NULL, price DECIMAL(10,2) NOT NULL, INDEX idx_items_order (order_id))"
+    ],
+    "seed_sql": [
+      "INSERT INTO products (id, name, description, price, stock, category, rating) SELECT gen_random_uuid(), 'Product ' || generate_series::STRING, 'Description for product ' || generate_series::STRING, (10 + random() * 990)::DECIMAL(10,2), 50 + (random() * 950)::INT, CASE (generate_series % 5) WHEN 0 THEN 'electronics' WHEN 1 THEN 'clothing' WHEN 2 THEN 'books' WHEN 3 THEN 'home' ELSE 'sports' END, (1 + random() * 4)::DECIMAL(3,2) FROM generate_series(1, 200)"
+    ],
+    "teardown_sql": [
+      "DROP TABLE IF EXISTS order_items",
+      "DROP TABLE IF EXISTS orders",
+      "DROP TABLE IF EXISTS shopping_carts",
+      "DROP TABLE IF EXISTS products"
+    ]
+  },
+  "operations": [
+    {
+      "name": "browse_catalog",
+      "type": "query",
+      "concurrency": 16,
+      "weight": 35,
+      "sql": [
+        "SELECT id, name, price, rating, stock FROM products WHERE category = $1 AND stock > 0 ORDER BY rating DESC LIMIT 20"
+      ],
+      "params": {
+        "think_time_ms": 100
+      }
+    },
+    {
+      "name": "product_detail",
+      "type": "query",
+      "concurrency": 8,
+      "weight": 20,
+      "sql": [
+        "SELECT p.id, p.name, p.description, p.price, p.stock, p.category, p.rating, COUNT(oi.id) as times_ordered FROM products p LEFT JOIN order_items oi ON oi.product_id = p.id WHERE p.id = $1 GROUP BY p.id, p.name, p.description, p.price, p.stock, p.category, p.rating"
+      ]
+    },
+    {
+      "name": "add_to_cart",
+      "type": "insert",
+      "concurrency": 8,
+      "weight": 15,
+      "sql": [
+        "INSERT INTO shopping_carts (user_id, product_id, quantity) VALUES ($1, $2, $3)"
+      ]
+    },
+    {
+      "name": "checkout",
+      "type": "transaction",
+      "concurrency": 8,
+      "weight": 15,
+      "sql": [
+        "UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1",
+        "INSERT INTO orders (user_id, total, status, shipping_address) VALUES ($3, $4, 'confirmed', $5)",
+        "INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($6, $2, $1, $7)",
+        "DELETE FROM shopping_carts WHERE user_id = $3 AND product_id = $2"
+      ],
+      "params": {
+        "hot_rows": 20,
+        "amount_range": [1, 5]
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "order_history",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT o.id, o.total, o.status, o.created_at, COUNT(oi.id) as item_count FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE o.user_id = $1 GROUP BY o.id, o.total, o.status, o.created_at ORDER BY o.created_at DESC LIMIT 10"
+      ],
+      "params": {
+        "think_time_ms": 150
+      }
+    },
+    {
+      "name": "search_products",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 5,
+      "sql": [
+        "SELECT id, name, price, rating FROM products WHERE name ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%' ORDER BY rating DESC LIMIT 10"
+      ],
+      "params": {
+        "think_time_ms": 200
+      }
+    }
+  ],
+  "assertions": [
+    {"metric": "error_rate", "operator": "<", "value": 0.02, "description": "Error rate under 2%"},
+    {"metric": "p99_latency_ms", "operator": "<", "value": 200, "description": "P99 latency under 200ms"},
+    {"metric": "ops_per_sec", "operator": ">", "value": 500, "description": "Minimum 500 ops/sec (read-heavy)"}
+  ]
+}

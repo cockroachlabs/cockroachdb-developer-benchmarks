@@ -1,0 +1,114 @@
+{
+  "name": "Gaming & Sports Betting",
+  "version": "1.0",
+  "description": "Simulates a real-time sports betting platform with live odds updates, bet placement with wallet balance contention, payout processing, and leaderboard queries. Tests high-contention writes (wallet updates), real-time reads (live odds), and transactional integrity (bet placement must check balance atomically).",
+  "duration_secs": 60,
+  "warmup_secs": 10,
+  "schema": {
+    "setup_sql": [
+      "CREATE TABLE IF NOT EXISTS players (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), username STRING NOT NULL UNIQUE, wallet_balance DECIMAL(15,2) NOT NULL DEFAULT 1000.00, total_bets INT NOT NULL DEFAULT 0, total_wins INT NOT NULL DEFAULT 0, vip_level STRING NOT NULL DEFAULT 'bronze', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_players_vip (vip_level))",
+      "CREATE TABLE IF NOT EXISTS events (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), sport STRING NOT NULL, event_name STRING NOT NULL, status STRING NOT NULL DEFAULT 'live', home_odds DECIMAL(6,2) NOT NULL, away_odds DECIMAL(6,2) NOT NULL, draw_odds DECIMAL(6,2), start_time TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_events_sport (sport), INDEX idx_events_status (status))",
+      "CREATE TABLE IF NOT EXISTS bets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), player_id UUID NOT NULL REFERENCES players(id), event_id UUID NOT NULL REFERENCES events(id), bet_type STRING NOT NULL, amount DECIMAL(10,2) NOT NULL, odds DECIMAL(6,2) NOT NULL, status STRING NOT NULL DEFAULT 'pending', potential_payout DECIMAL(15,2) NOT NULL, placed_at TIMESTAMPTZ NOT NULL DEFAULT now(), INDEX idx_bets_player (player_id), INDEX idx_bets_event (event_id), INDEX idx_bets_status (status))",
+      "CREATE TABLE IF NOT EXISTS leaderboard (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), player_id UUID NOT NULL REFERENCES players(id), period STRING NOT NULL, total_wagered DECIMAL(15,2) NOT NULL DEFAULT 0, total_won DECIMAL(15,2) NOT NULL DEFAULT 0, net_profit DECIMAL(15,2) NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE INDEX idx_leader_player_period (player_id, period))"
+    ],
+    "seed_sql": [
+      "INSERT INTO players (id, username, wallet_balance, vip_level) SELECT gen_random_uuid(), 'player_' || generate_series::STRING, 1000.00 + (random() * 9000)::DECIMAL(15,2), CASE (generate_series % 4) WHEN 0 THEN 'bronze' WHEN 1 THEN 'silver' WHEN 2 THEN 'gold' ELSE 'platinum' END FROM generate_series(1, 200)",
+      "INSERT INTO events (id, sport, event_name, status, home_odds, away_odds, draw_odds) SELECT gen_random_uuid(), CASE (generate_series % 4) WHEN 0 THEN 'football' WHEN 1 THEN 'basketball' WHEN 2 THEN 'tennis' ELSE 'esports' END, 'Match ' || generate_series::STRING, 'live', 1.5 + (random() * 3)::DECIMAL(6,2), 1.5 + (random() * 3)::DECIMAL(6,2), 2.0 + (random() * 4)::DECIMAL(6,2) FROM generate_series(1, 50)"
+    ],
+    "teardown_sql": [
+      "DROP TABLE IF EXISTS leaderboard",
+      "DROP TABLE IF EXISTS bets",
+      "DROP TABLE IF EXISTS events",
+      "DROP TABLE IF EXISTS players"
+    ]
+  },
+  "operations": [
+    {
+      "name": "place_bet",
+      "type": "transaction",
+      "concurrency": 16,
+      "weight": 35,
+      "sql": [
+        "UPDATE players SET wallet_balance = wallet_balance - $1, total_bets = total_bets + 1 WHERE id = $2 AND wallet_balance >= $1",
+        "INSERT INTO bets (player_id, event_id, bet_type, amount, odds, potential_payout) VALUES ($2, $3, $4, $1, $5, $1 * $5)"
+      ],
+      "params": {
+        "hot_rows": 30,
+        "amount_range": [5, 200]
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "live_odds",
+      "type": "query",
+      "concurrency": 16,
+      "weight": 25,
+      "sql": [
+        "SELECT id, sport, event_name, home_odds, away_odds, draw_odds FROM events WHERE status = 'live' ORDER BY start_time DESC LIMIT 20"
+      ]
+    },
+    {
+      "name": "update_odds",
+      "type": "update",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "UPDATE events SET home_odds = $1, away_odds = $2, draw_odds = $3 WHERE id = $4 AND status = 'live'"
+      ],
+      "params": {
+        "amount_range": [1, 10],
+        "hot_rows": 10
+      }
+    },
+    {
+      "name": "player_bets",
+      "type": "query",
+      "concurrency": 8,
+      "weight": 10,
+      "sql": [
+        "SELECT b.id, b.bet_type, b.amount, b.odds, b.status, b.potential_payout, e.event_name, e.sport FROM bets b JOIN events e ON e.id = b.event_id WHERE b.player_id = $1 ORDER BY b.placed_at DESC LIMIT 15"
+      ]
+    },
+    {
+      "name": "process_payout",
+      "type": "transaction",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "UPDATE bets SET status = 'won' WHERE id = $1 AND status = 'pending'",
+        "UPDATE players SET wallet_balance = wallet_balance + $2, total_wins = total_wins + 1 WHERE id = $3",
+        "INSERT INTO leaderboard (player_id, period, total_won, net_profit) VALUES ($3, 'daily', $2, $2) ON CONFLICT (player_id, period) DO UPDATE SET total_won = leaderboard.total_won + $2, net_profit = leaderboard.net_profit + $2, updated_at = now()"
+      ],
+      "params": {
+        "hot_rows": 30,
+        "amount_range": [10, 2000]
+      },
+      "mode": "both",
+      "library_mode": {
+        "use_retry": true,
+        "use_template": true
+      }
+    },
+    {
+      "name": "leaderboard_query",
+      "type": "query",
+      "concurrency": 4,
+      "weight": 10,
+      "sql": [
+        "SELECT p.username, p.vip_level, l.total_wagered, l.total_won, l.net_profit FROM leaderboard l JOIN players p ON p.id = l.player_id WHERE l.period = 'daily' ORDER BY l.net_profit DESC LIMIT 50"
+      ],
+      "params": {
+        "think_time_ms": 500
+      }
+    }
+  ],
+  "assertions": [
+    {"metric": "error_rate", "operator": "<", "value": 0.05, "description": "Error rate under 5% (high contention expected)"},
+    {"metric": "p99_latency_ms", "operator": "<", "value": 300, "description": "P99 latency under 300ms"},
+    {"metric": "ops_per_sec", "operator": ">", "value": 300, "description": "Minimum 300 ops/sec"}
+  ]
+}

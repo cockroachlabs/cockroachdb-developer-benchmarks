@@ -1,0 +1,21 @@
+FROM gradle:8-jdk21 AS builder
+WORKDIR /app
+
+COPY cockroachdb-spring-boot-starter/ /cockroachdb-spring-boot-starter/
+COPY build.gradle settings.gradle gradlew ./
+COPY gradle/ gradle/
+RUN sed -i "s|/Users/felipeg/Progs/AI/cockroachdb-spring-boot-starter|/cockroachdb-spring-boot-starter|g" settings.gradle
+COPY src src
+RUN gradle bootJar --no-daemon -x test
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=builder /app/build/libs/*.jar app.jar
+
+ENV AGENT_PORT=7009
+ENV AGENT_MODE=library
+ENV AGENT_LANGUAGE=java-native
+
+EXPOSE ${AGENT_PORT}
+
+ENTRYPOINT ["java", "-XX:+UseSerialGC", "-Xss256k", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

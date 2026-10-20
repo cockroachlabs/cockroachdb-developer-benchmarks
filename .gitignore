@@ -1,0 +1,58 @@
+# Build artifacts
+.pids/
+benchmark.db
+results/*.json
+
+# Dependencies
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+
+# Go
+controller/tmp/
+*.exe
+
+# Java
+agents/java/.gradle/
+agents/java/build/
+agents/java/bin/
+*.class
+
+# Python
+agents/python/__pycache__/
+agents/python/.venv/
+agents/python/*.egg-info/
+*.pyc
+
+# .NET
+agents/dotnet/bin/
+agents/dotnet/obj/
+agents/dotnet/*.user
+
+# Copied library sources (for Docker builds)
+agents/go/cockroachdb-go-library/
+agents/java/cockroachdb-spring-boot-starter/
+agents/python/cockroachdb-python-library/
+agents/dotnet/cockroachdb-dotnet-library/
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Superpowers brainstorming sessions
+.superpowers/
+
+
+# Environment
+.env
+.env.local
+benchmarks.db
+controller-bin
+data/

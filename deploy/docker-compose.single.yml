@@ -1,0 +1,35 @@
+services:
+  crdb-1:
+    image: cockroachdb/cockroach:latest-v26.3
+    command: start-single-node --insecure --advertise-addr=crdb-1
+    ports:
+      - "26257:26257"
+      - "8080:8080"
+    volumes:
+      - crdb-single-data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health?ready=1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - bench-net
+
+  crdb-init:
+    image: cockroachdb/cockroach:latest-v26.3
+    command: ["sql", "--insecure", "--host=crdb-1", "--file=/init.sql"]
+    depends_on:
+      crdb-1:
+        condition: service_healthy
+    volumes:
+      - ./init.sql:/init.sql:ro
+    networks:
+      - bench-net
+    restart: "no"
+
+volumes:
+  crdb-single-data:
+
+networks:
+  bench-net:
+    driver: bridge
